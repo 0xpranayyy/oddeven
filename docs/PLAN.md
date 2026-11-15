@@ -1,19 +1,34 @@
-# OddEven: Product & Technical Plan (v0.1)
+# OddEven: Product & Technical Plan (v0.2)
 
-> Working draft. This is the reference document for the scaffold. Push changes to the scaffold and I'll review them against this plan.
+> Working draft. This is the reference document for the scaffold.
+
+## Decisions log
+| Date | Decision |
+|---|---|
+| 2026-11-15 | **Venue:** our own CLOB behind the `Exchange` interface (Option A). HIP-4 stays a possible future adapter. |
+| 2026-11-15 | **Launch mode:** play money first. Real money, contracts and compliance move to M3. |
+| 2026-11-15 | **Engine for play money:** TypeScript in-memory CLOB (`packages/engine`). The Rust engine is deferred until real money or measured load requires it. |
+
+## Status
+- [x] **M0 scaffold:** monorepo, Biome, CI, design tokens, typed API client
+- [x] **M1 (mostly done):** home, event pages (binary and multi-outcome), live charts, ⌘K search, WebSocket feeds
+- [x] **M2 (partially done):** matching engine, orders, portfolio, admin resolution, leaderboard
+- [ ] **Next:** Postgres persistence (event-sourced from the engine), real auth (Better Auth), admin UI, e2e tests in CI, AI "why it moved" notes
 
 ## 1. What we're building
 
 A prediction market built around **probability as the product**: every screen should answer three questions quickly. What are the odds, why did they move, and what does it cost me to take a side?
 
 **References and what we take from each**
-| Reference | Take | Improve on |
-|---|---|---|
-| Polymarket | Market grid, Yes/No price-as-probability, multi-outcome events, comments | Dense and noisy cards, weak "why did this move" context, clunky onboarding for non-crypto users |
-| Outcome.xyz (HIP-4 on Hyperliquid) | Short-dated recurring markets (e.g. daily BTC binaries), fast on-chain settlement, a trader-grade feel | Mostly crypto-native; we can be just as fast and easier for mainstream users |
-| world.xyz | Couldn't load it from this environment (see note at the end). I'll add notes once it's reachable. | |
+
+| Reference                          | Take                                                                                                   | Improve on                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| Polymarket                         | Market grid, Yes/No price-as-probability, multi-outcome events, comments                               | Dense and noisy cards, weak "why did this move" context, clunky onboarding for non-crypto users |
+| Outcome.xyz (HIP-4 on Hyperliquid) | Short-dated recurring markets (e.g. daily BTC binaries), fast on-chain settlement, a trader-grade feel | Mostly crypto-native; we can be just as fast and easier for mainstream users                    |
+| world.xyz                          | Couldn't load it from this environment (see note at the end). I'll add notes once it's reachable.      |                                                                                                 |
 
 **What makes OddEven different**
+
 1. **A "why it moved" timeline.** Price chart annotations tied to news and large trades, with AI summaries.
 2. **One-tap trading.** The amount is entered in dollars, and the "you win $X" payout is always visible. Shares and the order book live in a Pro mode.
 3. **Live everything.** Prices, the order book, the activity feed and payouts stream in with no refresh.
@@ -23,6 +38,7 @@ A prediction market built around **probability as the product**: every screen sh
 ## 2. Product surface (MVP → v1)
 
 **MVP**
+
 - Home: featured hero market, trending and new, categories (Politics, Crypto, Sports, Economy, Tech, Culture), live ticker
 - Market page: chart (1H/1D/1W/ALL), trade panel, rules and resolution, activity, top holders, comments
 - Multi-outcome events (one event, many binary markets, as in Polymarket)
@@ -32,6 +48,7 @@ A prediction market built around **probability as the product**: every screen sh
 - Admin: create, edit, pause and resolve markets
 
 **v1**
+
 - Recurring short-dated markets (hourly and daily crypto binaries, Outcome-style)
 - Pro mode: order book, limit orders, depth chart, keyboard shortcuts
 - "Why it moved" AI annotations, watchlists, alerts (push and email)
@@ -77,6 +94,7 @@ A prediction market built around **probability as the product**: every screen sh
 ```
 
 **The key architectural decision (needs your call):**
+
 - **Option A: our own hybrid CLOB.** Matching happens off-chain and settlement happens on-chain (the Polymarket model, with conditional tokens on an L2 such as Base). We own the whole stack and the UX. It's more work, and we have to handle custody and contract audits.
 - **Option B: build on Hyperliquid HIP-4 (the Outcome model).** Matching and settlement are native to HyperCore, so we only build the frontend, indexer and market ops. It's much faster to ship, but we're tied to their primitives, liquidity and policies.
 - **Recommendation:** design the backend behind an `Exchange` interface. Ship the MVP on Option A with a **play-money/testnet mode** so product and design can iterate without regulatory or contract risk. Keep Option B as a pluggable venue adapter.
@@ -86,6 +104,7 @@ A prediction market built around **probability as the product**: every screen sh
 **Monorepo:** pnpm workspaces + Turborepo · TypeScript strict · Biome (lint and format) · Changesets
 
 **Frontend (`apps/web`)**
+
 - Next.js (App Router, RSC, server actions, Turbopack, React Compiler) + React 19
 - Tailwind CSS v4 + shadcn/ui + Radix · Motion (framer-motion) · `number-flow` for animated numbers
 - TanStack Query (server state) + Zustand (UI state) · nuqs (URL state) · react-hook-form + Zod
@@ -94,6 +113,7 @@ A prediction market built around **probability as the product**: every screen sh
 - i18n: next-intl · Analytics: PostHog · Errors: Sentry
 
 **Backend**
+
 - `apps/api`: Hono on Node/Bun, with a typed client via oRPC or tRPC (end-to-end types into web)
 - `apps/realtime`: WebSocket gateway (uWebSockets.js), with fan-out over Redis/Valkey pub/sub or NATS
 - `services/matching`: Rust price-time-priority CLOB, single writer per market, event-sourced to a log (NATS JetStream/Redpanda) so it can be replayed
@@ -103,13 +123,16 @@ A prediction market built around **probability as the product**: every screen sh
 - Auth: sessions via Better Auth, bound to the wallet (SIWE)
 
 **Contracts (`packages/contracts`)**
+
 - Foundry · Gnosis Conditional Tokens Framework (CTF)-style ERC-1155 outcome tokens · exchange contract for signed-order settlement · USDC collateral
 - Resolution: UMA Optimistic Oracle for subjective markets, Chainlink/Pyth for price markets, admin multisig as a fallback with a dispute window
 
 **AI**
+
 - The Claude API powers market-rule drafting, "why it moved" summaries, comment moderation and resolution-source checks. Agents propose; humans approve resolutions.
 
 **Infra**
+
 - Web on Vercel. Services on Fly.io or Railway (later AWS/K8s). Postgres on Neon. Redis on Upstash or self-hosted Valkey.
 - GitHub Actions CI (typecheck, lint, test, Playwright e2e, contract tests), preview deploys per PR
 - OpenTelemetry → Grafana/Honeycomb
@@ -151,13 +174,13 @@ oddeven/
 
 ## 8. Milestones
 
-| # | Milestone | Outcome |
-|---|---|---|
-| M0 | Scaffold (week 1) | Monorepo, CI, design tokens, shadcn setup, DB schema, auth stub, Storybook/Ladle |
-| M1 | Read-only product (weeks 2–3) | Home, market page, charts, search, all wired to seeded data and live WS mock |
-| M2 | Play-money trading (weeks 4–6) | Matching engine, orders, portfolio, real-time book, admin resolution |
-| M3 | Real money on testnet (weeks 7–9) | Contracts, embedded wallets, deposits, on-chain settlement, indexer |
-| M4 | Polish and launch prep (weeks 10–12) | Pro mode, AI annotations, notifications, perf/a11y pass, audit, geo-compliance |
+| #   | Milestone                            | Outcome                                                                          |
+| --- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| M0  | Scaffold (week 1)                    | Monorepo, CI, design tokens, shadcn setup, DB schema, auth stub, Storybook/Ladle |
+| M1  | Read-only product (weeks 2–3)        | Home, market page, charts, search, all wired to seeded data and live WS mock     |
+| M2  | Play-money trading (weeks 4–6)       | Matching engine, orders, portfolio, real-time book, admin resolution             |
+| M3  | Real money on testnet (weeks 7–9)    | Contracts, embedded wallets, deposits, on-chain settlement, indexer              |
+| M4  | Polish and launch prep (weeks 10–12) | Pro mode, AI annotations, notifications, perf/a11y pass, audit, geo-compliance   |
 
 ## 9. Compliance (don't skip)
 
@@ -173,4 +196,5 @@ Real-money prediction markets are regulated in many places. In the US, that mean
 6. Brand: name, colors, logo. Do the slides already define these?
 
 ---
-*Note: outcome.xyz and world.xyz couldn't be fetched from this cloud session, so their domains aren't in the session's network allowlist. Notes on Outcome come from public directory listings. The presentation you mentioned wasn't in the repo or the session; please commit it to `docs/` or attach it again.*
+
+_Note: outcome.xyz and world.xyz couldn't be fetched from this cloud session, so their domains aren't in the session's network allowlist. Notes on Outcome come from public directory listings. The presentation you mentioned wasn't in the repo or the session; please commit it to `docs/` or attach it again._

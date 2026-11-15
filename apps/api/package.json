@@ -1,0 +1,28 @@
+{
+  "name": "@oddeven/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/app.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.8",
+    "@hono/node-ws": "^1.3.1",
+    "@hono/zod-validator": "^0.9.1",
+    "@oddeven/engine": "workspace:*",
+    "@oddeven/shared": "workspace:*",
+    "hono": "^4.13.18",
+    "zod": "4.3.5"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15"
+  }
+}
