@@ -41,6 +41,14 @@ export class PriceHistory {
     return out;
   }
 
+  /** All points with t >= `from` (for incremental persistence). */
+  since(marketId: string, from: number): PricePoint[] {
+    const s = this.series.get(marketId) ?? [];
+    let i = s.length;
+    while (i > 0 && s[i - 1]!.t >= from) i--;
+    return s.slice(i).map((p) => ({ ...p }));
+  }
+
   /** Last known price at or before `t`. */
   priceAt(marketId: string, t: number): Ticks | undefined {
     const s = this.series.get(marketId);

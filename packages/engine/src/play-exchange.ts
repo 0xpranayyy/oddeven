@@ -130,6 +130,75 @@ export class PlayExchange implements Exchange {
     this.emit({ type: "account", userId });
   }
 
+  hasAccount(userId: string): boolean {
+    return this.accounts.has(userId);
+  }
+
+  // ---------------------------------------------------------------- persistence hooks
+
+  /** Re-list a market from storage (no events emitted). */
+  restoreMarket(
+    m: Omit<Market, "bestBid" | "bestAsk" | "price24hAgo" | "volume24h">,
+    history: PricePoint[],
+    volume24h = 0,
+  ): void {
+    const market: Market = { ...m, bestBid: null, bestAsk: null, price24hAgo: m.lastPrice, volume24h };
+    this.markets.set(m.id, { market, bids: [], asks: [], seq: 0 });
+    if (history.length) this.history.load(m.id, history);
+    else this.history.record(m.id, this.now(), m.lastPrice);
+  }
+
+  /** Restore an account and its positions exactly as stored. */
+  restoreAccount(a: Account, positions: Position[]): void {
+    const acct: AccountState = { ...a, positions: new Map() };
+    for (const p of positions) acct.positions.set(posKey(p.marketId, p.outcome), { ...p });
+    this.accounts.set(a.userId, acct);
+  }
+
+  /**
+   * Put a resting order back on the book without matching. Call in ascending
+   * `seq` order so FIFO priority within a price level is preserved. Escrow is
+   * not re-applied: the stored account/position locks already include it.
+   */
+  restoreOrder(order: Order, reserved: Mills, seq: number): void {
+    const s = this.mustMarket(order.marketId);
+    const r: Resting = {
+      order: { ...order },
+      bookSide: toBookSide(order.outcome, order.side),
+      bookPrice: toBookPrice(order.outcome, order.price),
+      reserved,
+      seq,
+    };
+    this.rest(s, r);
+    this.seq = Math.max(this.seq, seq);
+  }
+
+  /** Recompute derived state after a restore. */
+  finishRestore(counters: { ids: number; seq: number }): void {
+    this.ids = Math.max(this.ids, counters.ids);
+    this.seq = Math.max(this.seq, counters.seq);
+    for (const s of this.markets.values()) {
+      s.market.bestBid = s.bids[0]?.bookPrice ?? null;
+      s.market.bestAsk = s.asks[0]?.bookPrice ?? null;
+    }
+    this.refreshStats();
+  }
+
+  getCounters(): { ids: number; seq: number } {
+    return { ids: this.ids, seq: this.seq };
+  }
+
+  /** Internal resting state of an open order, for persistence. */
+  getOrderState(orderId: string): { order: Order; reserved: Mills; seq: number } | undefined {
+    const r = this.orders.get(orderId);
+    return r && { order: { ...r.order }, reserved: r.reserved, seq: r.seq };
+  }
+
+  setVolume24h(marketId: string, volume: Mills): void {
+    const m = this.markets.get(marketId)?.market;
+    if (m) m.volume24h = volume;
+  }
+
   listMarkets(): Market[] {
     return [...this.markets.values()].map((s) => s.market);
   }
@@ -292,6 +361,7 @@ export class PlayExchange implements Exchange {
       this.release(r);
       r.order.status = "cancelled";
       affected.add(r.order.userId);
+      this.emit({ type: "order", order: { ...r.order } });
     }
     for (const acct of this.accounts.values()) {
       for (const o of ["yes", "no"] as const) {
@@ -354,6 +424,8 @@ export class PlayExchange implements Exchange {
         takerSide: taker.order.side,
         takerId: taker.order.userId,
         makerId: maker.order.userId,
+        takerOrderId: taker.order.id,
+        makerOrderId: maker.order.id,
         ts: this.now(),
       };
       trades.push(trade);

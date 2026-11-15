@@ -18,6 +18,7 @@ import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
 import { z } from "zod";
 import { isBot } from "./bots";
+import { type ExchangeStore, hashToken, type LoadedState } from "./store";
 
 const STARTING_BALANCE = dollarsToMills(1_000);
 const FAUCET_AMOUNT = dollarsToMills(1_000);
@@ -28,15 +29,19 @@ export interface AppContext {
   events: Map<string, MarketEvent>;
   adminKey: string;
   webOrigin: string;
+  store: ExchangeStore;
 }
 
-export interface PublicTrade extends Omit<Trade, "takerId" | "makerId"> {
+export interface PublicTrade extends Omit<Trade, "takerId" | "makerId" | "takerOrderId" | "makerOrderId"> {
   trader: string;
 }
 
 /** Session + market-data state that lives next to the exchange. */
 export class Services {
-  readonly sessions = new Map<string, { userId: string; deposited: number }>();
+  /** sha256(token) → userId */
+  readonly sessions = new Map<string, string>();
+  /** userId → play money granted (humans only) */
+  readonly deposited = new Map<string, number>();
   readonly eventById = new Map<string, MarketEvent>();
   private recent = new Map<string, PublicTrade[]>();
   private global: PublicTrade[] = [];
@@ -55,8 +60,23 @@ export class Services {
     });
   }
 
+  /** Rehydrate sessions and feeds after a restore. */
+  hydrate(state: LoadedState) {
+    for (const [hash, userId] of state.sessions) this.sessions.set(hash, userId);
+    for (const [userId, d] of state.deposited) this.deposited.set(userId, d);
+    // recentTrades is newest-first; build feeds oldest→newest via unshift.
+    for (const t of [...state.recentTrades].reverse()) {
+      const pt = this.toPublic(t);
+      const list = this.recent.get(pt.marketId) ?? [];
+      list.unshift(pt);
+      this.recent.set(pt.marketId, list);
+      this.global.unshift(pt);
+    }
+    this.global.length = Math.min(this.global.length, 100);
+  }
+
   toPublic(t: Trade): PublicTrade {
-    const { takerId, makerId: _, ...rest } = t;
+    const { takerId, makerId: _, takerOrderId: __, makerOrderId: ___, ...rest } = t;
     return { ...rest, trader: this.ctx.ex.getAccount(takerId)?.name ?? "anon" };
   }
 
@@ -64,17 +84,27 @@ export class Services {
     return marketId ? (this.recent.get(marketId) ?? []) : this.global;
   }
 
-  createSession(name?: string) {
+  async createSession(name?: string) {
     const userId = `u_${randomUUID()}`;
     const token = randomBytes(24).toString("base64url");
     const handle = name?.trim() || `trader_${userId.slice(2, 7)}`;
+    // Durable first, then live: the client only gets a token that will survive a restart.
+    await this.ctx.store.createUser(userId, handle, STARTING_BALANCE, token);
     this.ctx.ex.createAccount(userId, handle, STARTING_BALANCE);
-    this.sessions.set(token, { userId, deposited: STARTING_BALANCE });
+    this.sessions.set(hashToken(token), userId);
+    this.deposited.set(userId, STARTING_BALANCE);
     return { token, userId };
   }
 
-  userFromToken(token: string | undefined) {
-    return token ? this.sessions.get(token) : undefined;
+  userFromToken(token: string | undefined): { userId: string } | undefined {
+    const userId = token ? this.sessions.get(hashToken(token)) : undefined;
+    return userId ? { userId } : undefined;
+  }
+
+  async topUp(userId: string, amount: number) {
+    await this.ctx.store.addDeposit(userId, amount);
+    this.ctx.ex.credit(userId, amount);
+    this.deposited.set(userId, (this.deposited.get(userId) ?? 0) + amount);
   }
 
   eventWithMarkets(e: MarketEvent) {
@@ -119,7 +149,7 @@ export class Services {
         };
       });
     const positionsValue = positions.reduce((s, p) => s + p.value, 0);
-    const deposited = [...this.sessions.values()].find((s) => s.userId === userId)?.deposited ?? 0;
+    const deposited = this.deposited.get(userId) ?? 0;
     const orders = ex.getOpenOrders(userId).map((o) => {
       const m = ex.getMarket(o.marketId)!;
       const e = this.eventById.get(m.eventId)!;
@@ -136,8 +166,8 @@ export class Services {
   }
 
   leaderboard() {
-    const rows = [...this.sessions.values()].map((s) => {
-      const p = this.portfolio(s.userId);
+    const rows = [...this.deposited.keys()].map((userId) => {
+      const p = this.portfolio(userId);
       return { name: p.account.name, equity: p.equity, pnl: p.pnl };
     });
     return rows.sort((a, b) => b.pnl - a.pnl).slice(0, 50);
@@ -164,7 +194,9 @@ export function buildRoutes(svc: Services) {
   };
 
   return new Hono()
-    .get("/health", (c) => c.json({ ok: true, mode: "play-money" as const }))
+    .get("/health", (c) =>
+      c.json({ ok: true, mode: "play-money" as const, persistence: svc.ctx.store.stats }),
+    )
 
     .get("/events", v("query", z.object({ category: z.string().optional() })), (c) => {
       const { category } = c.req.valid("query");
@@ -195,8 +227,8 @@ export function buildRoutes(svc: Services) {
 
     .get("/leaderboard", (c) => c.json({ rows: svc.leaderboard() }))
 
-    .post("/session", v("json", z.object({ name: z.string().max(24).optional() }).default({})), (c) =>
-      c.json(svc.createSession(c.req.valid("json").name)),
+    .post("/session", v("json", z.object({ name: z.string().max(24).optional() }).default({})), async (c) =>
+      c.json(await svc.createSession(c.req.valid("json").name)),
     )
 
     .get("/me", (c) => {
@@ -204,14 +236,42 @@ export function buildRoutes(svc: Services) {
       return c.json(svc.portfolio(userId));
     })
 
-    .post("/me/faucet", (c) => {
-      const s = auth(c.req.header("authorization"));
-      const acct = ex.getAccount(s.userId)!;
+    .get("/me/history", async (c) => {
+      const { userId } = auth(c.req.header("authorization"));
+      const fills = await svc.ctx.store.userFills(userId);
+      return c.json({
+        fills: fills.map((f) => {
+          const m = ex.getMarket(f.marketId);
+          const e = m && svc.eventById.get(m.eventId);
+          const price = f.outcome === "yes" ? f.yesPrice : PRICE_SCALE - f.yesPrice;
+          return {
+            id: f.id,
+            ts: f.ts,
+            outcome: f.outcome,
+            side: f.side,
+            role: f.role,
+            shares: f.shares,
+            price,
+            notional: price * f.shares,
+            event: {
+              slug: e?.slug ?? "",
+              title: e?.title ?? "",
+              image: e?.image ?? "",
+              multi: (e?.marketIds.length ?? 0) > 1,
+            },
+            market: { id: f.marketId, label: m?.label ?? "" },
+          };
+        }),
+      });
+    })
+
+    .post("/me/faucet", async (c) => {
+      const { userId } = auth(c.req.header("authorization"));
+      const acct = ex.getAccount(userId)!;
       if (acct.cash - acct.locked >= dollarsToMills(100)) {
         throw new HTTPException(400, { message: "Top-ups unlock when your balance is under $100" });
       }
-      ex.credit(s.userId, FAUCET_AMOUNT);
-      s.deposited += FAUCET_AMOUNT;
+      await svc.topUp(userId, FAUCET_AMOUNT);
       return c.json({ ok: true });
     })
 

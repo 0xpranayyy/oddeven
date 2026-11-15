@@ -1,5 +1,5 @@
 "use client";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Wallet, X } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
@@ -188,30 +188,28 @@ export function PortfolioView() {
               <Empty>No open orders.</Empty>
             ))}
 
-          {tab === "settled" &&
-            (settled.length ? (
-              <ul className="divide-y">
-                {settled.map((p) => (
-                  <li key={`${p.marketId}${p.outcome}`} className="flex items-center gap-4 p-4">
-                    <EventIcon image={p.event.image} className="size-10" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">{p.event.title}</div>
-                      <div className="text-xs text-muted">
-                        {p.outcome.toUpperCase()} {p.event.multi && `· ${p.market.label}`}{" "}
-                        {p.market.status === "resolved"
-                          ? `· Resolved ${p.market.resolvedOutcome?.toUpperCase()}`
-                          : "· Closed out"}
-                      </div>
+          {tab === "settled" && <Fills />}
+          {tab === "settled" && settled.length > 0 && (
+            <ul className="divide-y">
+              {settled.map((p) => (
+                <li key={`${p.marketId}${p.outcome}`} className="flex items-center gap-4 p-4">
+                  <EventIcon image={p.event.image} className="size-10" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium">{p.event.title}</div>
+                    <div className="text-xs text-muted">
+                      {p.outcome.toUpperCase()} {p.event.multi && `· ${p.market.label}`}{" "}
+                      {p.market.status === "resolved"
+                        ? `· Resolved ${p.market.resolvedOutcome?.toUpperCase()}`
+                        : "· Closed out"}
                     </div>
-                    <span className={cn("tnum font-semibold", p.realizedPnl >= 0 ? "text-yes" : "text-no")}>
-                      {p.realizedPnl >= 0 ? "+" : "−"}${Math.abs(p.realizedPnl / 1000).toFixed(2)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <Empty>Closed and resolved positions show up here.</Empty>
-            ))}
+                  </div>
+                  <span className={cn("tnum font-semibold", p.realizedPnl >= 0 ? "text-yes" : "text-no")}>
+                    {p.realizedPnl >= 0 ? "+" : "−"}${Math.abs(p.realizedPnl / 1000).toFixed(2)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
     </div>
@@ -234,4 +232,57 @@ function Stat({ label, children, big }: { label: string; children: React.ReactNo
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <p className="p-10 text-center text-sm text-muted">{children}</p>;
+}
+
+function Fills() {
+  const token = useSession((s) => s.token);
+  const { data, isLoading } = useQuery({
+    queryKey: ["history", token],
+    queryFn: () => unwrap(api().me.history.$get()),
+    enabled: !!token,
+    refetchInterval: 5_000,
+  });
+  if (isLoading) {
+    return (
+      <div className="space-y-2 p-4">
+        <Skeleton className="h-12" />
+        <Skeleton className="h-12" />
+      </div>
+    );
+  }
+  if (!data?.fills.length) return <Empty>Your trades will show up here.</Empty>;
+  return (
+    <ul className="divide-y border-b">
+      {data.fills.map((f) => (
+        <li key={`${f.id}${f.role}`}>
+          <Link
+            href={`/event/${f.event.slug}?market=${f.market.id}&outcome=${f.outcome}`}
+            className="flex items-center gap-4 p-4 hover:bg-surface-2/60"
+          >
+            <EventIcon image={f.event.image} className="size-10" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-medium">{f.event.title}</div>
+              <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
+                <span className={f.side === "buy" ? "text-fg" : "text-muted"}>
+                  {f.side === "buy" ? "Bought" : "Sold"}
+                </span>
+                <Badge tone={f.outcome === "yes" ? "yes" : "no"} className="uppercase">
+                  {f.outcome}
+                </Badge>
+                {f.event.multi && <span>{f.market.label}</span>}
+                <span className="tnum">
+                  {f.shares.toLocaleString()} @ {(f.price / 10).toFixed(1)}¢
+                </span>
+                {f.role === "maker" && <span className="text-faint">· limit</span>}
+              </div>
+            </div>
+            <div className="text-right">
+              <Usd mills={f.notional} className="font-medium" />
+              <div className="text-xs text-faint">{timeAgo(f.ts)} ago</div>
+            </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
 }

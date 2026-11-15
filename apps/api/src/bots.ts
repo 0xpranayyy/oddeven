@@ -29,8 +29,9 @@ export const isBot = (userId: string) => userId.startsWith("bot_");
  */
 export function startBots(ex: PlayExchange, events: Map<string, MarketEvent>) {
   const rnd = mulberry32(Date.now() & 0xffff);
-  ex.createAccount(MM_ID, "OddEven MM", BOT_CASH);
-  for (const t of TRADERS) ex.createAccount(`bot_${t}`, t, BOT_CASH);
+  // Accounts may already exist (restored from the database).
+  if (!ex.hasAccount(MM_ID)) ex.createAccount(MM_ID, "OddEven MM", BOT_CASH);
+  for (const t of TRADERS) if (!ex.hasAccount(`bot_${t}`)) ex.createAccount(`bot_${t}`, t, BOT_CASH);
 
   // Latent log-weights per market.
   const logw = new Map<string, number>();

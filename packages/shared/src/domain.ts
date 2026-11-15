@@ -75,6 +75,8 @@ export interface Trade {
   takerSide: Side;
   takerId: string;
   makerId: string;
+  takerOrderId: string;
+  makerOrderId: string;
   ts: number;
 }
 

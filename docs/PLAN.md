@@ -3,17 +3,21 @@
 > Working draft. This is the reference document for the scaffold.
 
 ## Decisions log
-| Date | Decision |
-|---|---|
-| 2026-11-15 | **Venue:** our own CLOB behind the `Exchange` interface (Option A). HIP-4 stays a possible future adapter. |
-| 2026-11-15 | **Launch mode:** play money first. Real money, contracts and compliance move to M3. |
+
+| Date       | Decision                                                                                                                                             |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-15 | **Venue:** our own CLOB behind the `Exchange` interface (Option A). HIP-4 stays a possible future adapter.                                           |
+| 2026-11-15 | **Launch mode:** play money first. Real money, contracts and compliance move to M3.                                                                  |
 | 2026-11-15 | **Engine for play money:** TypeScript in-memory CLOB (`packages/engine`). The Rust engine is deferred until real money or measured load requires it. |
+| 2026-11-15 | **Persistence:** in-memory engine with batched writes to Postgres every 250ms, one transaction per batch. Restore on boot. PGlite for zero-setup dev, real Postgres via `DATABASE_URL`. A crash can lose up to 250ms of activity; that's acceptable for play money and gets revisited for real money. |
 
 ## Status
+
 - [x] **M0 scaffold:** monorepo, Biome, CI, design tokens, typed API client
 - [x] **M1 (mostly done):** home, event pages (binary and multi-outcome), live charts, ⌘K search, WebSocket feeds
 - [x] **M2 (partially done):** matching engine, orders, portfolio, admin resolution, leaderboard
-- [ ] **Next:** Postgres persistence (event-sourced from the engine), real auth (Better Auth), admin UI, e2e tests in CI, AI "why it moved" notes
+- [x] **Persistence:** Postgres and PGlite via Drizzle, batched writes, full restore, invariant checker, migrations
+- [ ] **Next:** admin UI (create, resolve, pause markets), real auth (Better Auth), Playwright e2e in CI, price-history compaction into candles, AI "why it moved" notes
 
 ## 1. What we're building
 

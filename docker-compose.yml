@@ -1,0 +1,18 @@
+# Optional: real Postgres for local dev. Without DATABASE_URL the API uses embedded PGlite.
+#   docker compose up -d
+#   DATABASE_URL=postgres://oddeven:oddeven@localhost:5432/oddeven pnpm dev
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: oddeven
+      POSTGRES_PASSWORD: oddeven
+      POSTGRES_DB: oddeven
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oddeven"]
+      interval: 2s
+      retries: 20
+volumes:
+  pgdata:
